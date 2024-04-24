@@ -1,0 +1,9 @@
+[submodule "vendor/assimp"]
+	path = vendor/assimp
+	url = https://github.com/assimp/assimp
+[submodule "vendor/stb"]
+	path = vendor/stb
+	url = https://github.com/nothings/stb
+[submodule "vendor/VulkanMemoryAllocator"]
+	path = vendor/VulkanMemoryAllocator
+	url = https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator
