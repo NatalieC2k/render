@@ -1,23 +1,30 @@
 #include "render.h"
 
+#ifndef VMA_IMPLEMENTATION
+#define VMA_IMPLEMENTATION
+#include "vk_mem_alloc.h"
+#endif
+
 RENDER_LOGGER_DEFINITION
 namespace render {
 namespace vkutil {
 VkResult CreateDebugUtilsMessengerEXT(VkInstance instance, const VkDebugUtilsMessengerCreateInfoEXT* pCreateInfo,
                                       const VkAllocationCallbacks* pAllocator,
                                       VkDebugUtilsMessengerEXT* pDebugMessenger) {
-    auto func = (PFN_vkCreateDebugUtilsMessengerEXT)vkGetInstanceProcAddr(instance, "vkCreateDebugUtilsMessengerEXT");
-    if (func != nullptr) {
-        return func(instance, pCreateInfo, pAllocator, pDebugMessenger);
+    auto function =
+        (PFN_vkCreateDebugUtilsMessengerEXT)vkGetInstanceProcAddr(instance, "vkCreateDebugUtilsMessengerEXT");
+    if (function != nullptr) {
+        return function(instance, pCreateInfo, pAllocator, pDebugMessenger);
     } else {
         return VK_ERROR_EXTENSION_NOT_PRESENT;
     }
 }
 void DestroyDebugUtilsMessengerEXT(VkInstance instance, VkDebugUtilsMessengerEXT debugMessenger,
                                    const VkAllocationCallbacks* pAllocator) {
-    auto func = (PFN_vkDestroyDebugUtilsMessengerEXT)vkGetInstanceProcAddr(instance, "vkDestroyDebugUtilsMessengerEXT");
-    if (func != nullptr) {
-        func(instance, debugMessenger, pAllocator);
+    auto function =
+        (PFN_vkDestroyDebugUtilsMessengerEXT)vkGetInstanceProcAddr(instance, "vkDestroyDebugUtilsMessengerEXT");
+    if (function != nullptr) {
+        function(instance, debugMessenger, pAllocator);
     }
 }
 } // namespace vkutil
@@ -64,9 +71,9 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL DefaultVkDebugUtilsMessengerEXTCallback(
 std::vector<const char*> VkDeviceExtensionSupport(VkPhysicalDevice vk_physical_device,
                                                   std::vector<const char*> extension_names) {
     uint32_t extension_property_count = 0;
-    vkEnumerateInstanceExtensionProperties(nullptr, &extension_property_count, nullptr);
+    vkEnumerateDeviceExtensionProperties(vk_physical_device, nullptr, &extension_property_count, nullptr);
     auto extension_properties = new VkExtensionProperties[extension_property_count];
-    vkEnumerateInstanceExtensionProperties(nullptr, &extension_property_count, extension_properties);
+    vkEnumerateDeviceExtensionProperties(vk_physical_device, nullptr, &extension_property_count, extension_properties);
     for (unsigned int i = 0; i < extension_property_count; i++) {
         for (auto iterator = extension_names.begin(); iterator != extension_names.end(); iterator++) {
             if (strcmp(extension_properties[i].extensionName, *iterator) == 0) {
@@ -95,17 +102,36 @@ uint32_t RateVkPhysicalDevice(VkPhysicalDevice vk_physical_device, std::vector<c
 }
 VulkanQueueIndices QueryVkPhysicalDeviceQueueSupport(VkPhysicalDevice vk_physical_device) {
     VulkanQueueIndices queue_indices{};
-    vk_physical_device = VK_NULL_HANDLE;
+    uint32_t queue_family_count = 0;
+    vkGetPhysicalDeviceQueueFamilyProperties(vk_physical_device, &queue_family_count, nullptr);
+    VkQueueFamilyProperties* queue_family_properties = new VkQueueFamilyProperties[queue_family_count];
+    vkGetPhysicalDeviceQueueFamilyProperties(vk_physical_device, &queue_family_count, queue_family_properties);
+
+    const uint32_t universal_queue_bitmask = VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT;
+    for (int i = 0; i < queue_family_count; i++) {
+        if ((queue_family_properties[i].queueFlags & universal_queue_bitmask) == universal_queue_bitmask) {
+            queue_indices.universal_queue_count = queue_family_properties[i].queueCount;
+            queue_indices.universal_family_index = i;
+        } else if (queue_family_properties[i].queueFlags & VK_QUEUE_COMPUTE_BIT) {
+        } else if (!(queue_family_properties[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) &&
+                   queue_family_properties[i].queueFlags & VK_QUEUE_TRANSFER_BIT) {
+        }
+    }
     return queue_indices;
 }
 
 render::Context context{};
 Context CreateContext(ContextInfo info) {
     Context context{};
-    unsigned int window_extension_count = 0;
-    core::GetInstanceExtensions(info.window, &window_extension_count, nullptr);
-    std::vector<const char*> extension_names(window_extension_count);
-    core::GetInstanceExtensions(info.window, &window_extension_count, extension_names.data());
+    std::vector<const char*> extension_names{};
+
+    if (info.window) {
+        unsigned int window_extension_count = 0;
+        core::window::GetRequiredVkInstanceExtensions(info.window.value(), &window_extension_count, nullptr);
+        extension_names.resize(window_extension_count);
+        core::window::GetRequiredVkInstanceExtensions(info.window.value(), &window_extension_count,
+                                                      extension_names.data());
+    }
 
     extension_names.emplace_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
     extension_names.emplace_back(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME);
@@ -134,7 +160,7 @@ Context CreateContext(ContextInfo info) {
             unsupported_layer_string += layer;
             unsupported_layer_string += ", ";
         }
-        RENDER_LOG_ERROR("The Following VkInstance Extensions are Unsupported: {}", unsupported_layer_string);
+        RENDER_LOG_ERROR("The Following VkInstance Layers are Unsupported: {}", unsupported_layer_string);
     }
 
     VkApplicationInfo application_info{};
@@ -188,7 +214,9 @@ Context CreateContext(ContextInfo info) {
 
     std::vector<const char*> device_extension_names{};
     device_extension_names.emplace_back("VK_KHR_portability_subset");
-    device_extension_names.emplace_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
+    if (info.window) {
+        device_extension_names.emplace_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
+    }
 
     uint32_t physical_device_count;
     vkEnumeratePhysicalDevices(context.vk_instance, &physical_device_count, nullptr);
@@ -241,10 +269,11 @@ Context CreateContext(ContextInfo info) {
 
         result = vkCreateDevice(vk_physical_device, &device_create_info, nullptr, &context.vk_device);
         if (result == VK_SUCCESS) {
+            context.vk_physical_device = vk_physical_device;
             break;
         }
     }
-    if (context.vk_device == VK_NULL_HANDLE) {
+    if (context.vk_physical_device == VK_NULL_HANDLE || context.vk_device == VK_NULL_HANDLE) {
         RENDER_LOG_ERROR("CONTEXT CREATION: Failed to Create VkDevice!");
     }
     context.universal_queue.vk_family_index = queue_indices.universal_family_index;
@@ -261,11 +290,284 @@ Context CreateContext(ContextInfo info) {
     allocator_create_info.device = context.vk_device;
     allocator_create_info.instance = context.vk_instance;
     allocator_create_info.pVulkanFunctions = &vma_vulkan_functions;
-    result = vmaCreateAllocator(&allocator_create_info, &context.vma_allocator);
+    vmaCreateAllocator(&allocator_create_info, &context.vma_allocator);
     if (result != VK_SUCCESS) {
         RENDER_LOG_ERROR("CONTEXT CREATION: Failed to Create VmaAllocator!");
     }
     return context;
 }
-void DestroyContext(Context context) {}
+void DestroyContext(Context context) {
+    vmaDestroyAllocator(context.vma_allocator);
+
+    vkDestroyDevice(context.vk_device, nullptr);
+
+    vkutil::DestroyDebugUtilsMessengerEXT(context.vk_instance, context.vk_debug_utils_messenger, nullptr);
+    vkDestroyInstance(context.vk_instance, nullptr);
+}
+
+CommandPool* CreateCommandPool() {
+    CommandPool* pool = new CommandPool{};
+    VkCommandPoolCreateInfo pool_create_info{};
+    pool_create_info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+    pool_create_info.pNext = nullptr;
+    pool_create_info.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+
+    pool_create_info.queueFamilyIndex = context.universal_queue.vk_family_index;
+    VkResult result =
+        vkCreateCommandPool(render::context.vk_device, &pool_create_info, nullptr, &pool->vk_command_pool);
+    if (result != VK_SUCCESS) {
+        RENDER_LOG_ERROR("COMMAND POOL CREATION: Failed to Create VkCommandPool!");
+    }
+
+    pool->active = true;
+    pool->record_thread = std::thread(command_pool::RecordThreadFunction, pool);
+    return pool;
+}
+void DestroyCommandPool(CommandPool* pool) {
+    pool->mutex.lock();
+    pool->active = false;
+    pool->record_queue.emplace_back([]() {});
+    pool->mutex.unlock();
+    pool->condition_variable.notify_one();
+
+    pool->record_thread.join();
+
+    vkDestroyCommandPool(context.vk_device, pool->vk_command_pool, nullptr);
+    for (auto command_buffer : pool->free_command_buffer_queue) {
+        delete command_buffer;
+    }
+    delete pool;
+}
+namespace command_pool {
+CommandBuffer* BorrowCommandBuffer(CommandPool* pool) {
+    if (pool->free_command_buffer_queue.size() != 0) {
+        auto command_buffer = pool->free_command_buffer_queue.back();
+        pool->free_command_buffer_queue.pop_back();
+        return command_buffer;
+    }
+    auto command_buffer = new CommandBuffer{};
+    VkCommandBufferAllocateInfo allocate_info{};
+    allocate_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    allocate_info.pNext = nullptr;
+    allocate_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    allocate_info.commandBufferCount = 1;
+    allocate_info.commandPool = pool->vk_command_pool;
+    VkResult result =
+        vkAllocateCommandBuffers(render::context.vk_device, &allocate_info, &command_buffer->vk_command_buffer);
+    if (result != VK_SUCCESS) {
+        RENDER_LOG_ERROR("GET COMMAND BUFFER: Failed to Allocate VkCommandBuffer from VkCommandPool!");
+    }
+    return command_buffer;
+}
+void ReturnCommandBuffer(CommandPool* pool, CommandBuffer* command_buffer) {
+    pool->free_command_buffer_queue.emplace_front(command_buffer);
+}
+
+void RecordThreadFunction(CommandPool* pool) {
+    while (pool->active) {
+        std::unique_lock<std::mutex> lock(pool->mutex);
+        pool->condition_variable.wait(lock, [pool]() { return pool->record_queue.size() != 0; });
+        auto function = pool->record_queue.back();
+        pool->record_queue.pop_back();
+        function();
+        lock.unlock();
+    }
+}
+void RecordAsync(CommandPool* pool, std::function<void()> function) {
+    pool->mutex.lock();
+    pool->record_queue.emplace_back(function);
+    pool->mutex.unlock();
+    pool->condition_variable.notify_one();
+}
+} // namespace command_pool
+
+VkSurfaceFormatKHR SelectVkSwapchainSurfaceFormat(VkSurfaceKHR vk_surface) {
+    uint32_t available_format_count;
+    vkGetPhysicalDeviceSurfaceFormatsKHR(render::context.vk_physical_device, vk_surface, &available_format_count,
+                                         nullptr);
+    VkSurfaceFormatKHR* available_surface_formats = new VkSurfaceFormatKHR[available_format_count];
+    vkGetPhysicalDeviceSurfaceFormatsKHR(render::context.vk_physical_device, vk_surface, &available_format_count,
+                                         available_surface_formats);
+    VkSurfaceFormatKHR chosen_surface_format = available_surface_formats[0];
+    for (int i = 0; i < available_format_count; i++) {
+        if (available_surface_formats[i].format == VK_FORMAT_B8G8R8A8_SRGB &&
+            available_surface_formats[i].colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
+            chosen_surface_format = available_surface_formats[i];
+            break;
+        }
+    }
+    delete[] available_surface_formats;
+    return chosen_surface_format;
+}
+VkPresentModeKHR SelectVkSwapchainPresentMode(VkSurfaceKHR vk_surface) {
+    uint32_t available_present_mode_count;
+    vkGetPhysicalDeviceSurfacePresentModesKHR(render::context.vk_physical_device, vk_surface,
+                                              &available_present_mode_count, nullptr);
+    VkPresentModeKHR* available_present_modes = new VkPresentModeKHR[available_present_mode_count];
+    vkGetPhysicalDeviceSurfacePresentModesKHR(render::context.vk_physical_device, vk_surface,
+                                              &available_present_mode_count, available_present_modes);
+
+    VkPresentModeKHR chosen_present_mode = VK_PRESENT_MODE_FIFO_KHR;
+    for (int i = 0; i < available_present_mode_count; i++) {
+        if (available_present_modes[i] == VK_PRESENT_MODE_MAILBOX_KHR) {
+            chosen_present_mode = available_present_modes[i];
+            break;
+        }
+    }
+    delete[] available_present_modes;
+    return chosen_present_mode;
+}
+struct VkSwapchainImageDetails {
+    Extent2D extent;
+    uint32_t image_count;
+    VkSurfaceTransformFlagBitsKHR pre_transform;
+};
+VkSwapchainImageDetails QueryVkSwapchainImageDetails(core::Window window, VkSurfaceKHR vk_surface) {
+    VkSwapchainImageDetails image_details{};
+    VkSurfaceCapabilitiesKHR vk_surface_capabilities{};
+    vkGetPhysicalDeviceSurfaceCapabilitiesKHR(context.vk_physical_device, vk_surface, &vk_surface_capabilities);
+
+    if (vk_surface_capabilities.currentExtent.width != std::numeric_limits<uint32_t>::max()) {
+        image_details.extent = *(Extent2D*)&vk_surface_capabilities.currentExtent;
+    } else {
+        image_details.extent = core::window::GetFramebufferExtent(window);
+
+        image_details.extent.x = std::clamp(image_details.extent.x, vk_surface_capabilities.minImageExtent.width,
+                                            vk_surface_capabilities.maxImageExtent.width);
+        image_details.extent.y = std::clamp(image_details.extent.y, vk_surface_capabilities.minImageExtent.height,
+                                            vk_surface_capabilities.maxImageExtent.height);
+    }
+    image_details.image_count = vk_surface_capabilities.minImageCount + 1;
+    if (vk_surface_capabilities.maxImageCount > 0 &&
+        image_details.image_count > vk_surface_capabilities.maxImageCount) {
+        image_details.image_count = vk_surface_capabilities.maxImageCount;
+    }
+    image_details.pre_transform = vk_surface_capabilities.currentTransform;
+    return image_details;
+}
+void CreateSwapchainVkImageViews(Swapchain* swapchain) {
+    VkImageViewCreateInfo create_info{};
+    create_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    create_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    create_info.format = swapchain->vk_surface_format.format;
+    create_info.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
+    create_info.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
+    create_info.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
+    create_info.components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
+
+    create_info.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    create_info.subresourceRange.baseMipLevel = 0;
+    create_info.subresourceRange.levelCount = 1;
+    create_info.subresourceRange.baseArrayLayer = 0;
+    create_info.subresourceRange.layerCount = 1;
+
+    swapchain->vk_image_views.resize(swapchain->vk_images.size());
+    for (int i = 0; i < swapchain->vk_image_views.size(); i++) {
+        create_info.image = swapchain->vk_images[i];
+        vkCreateImageView(render::context.vk_device, &create_info, nullptr, &swapchain->vk_image_views[i]);
+    }
+}
+void InitializeSwapchain(Swapchain* swapchain) {
+    core::window::CreateVkSurface(swapchain->window, &context.vk_instance, &swapchain->vk_surface);
+    if (swapchain->vk_surface == VK_NULL_HANDLE) {
+        RENDER_LOG_ERROR("SWAPCHAIN CREATION: Failed to Create VkSurfaceKHR!");
+    }
+    swapchain->vk_surface_format = SelectVkSwapchainSurfaceFormat(swapchain->vk_surface);
+    auto present_mode = SelectVkSwapchainPresentMode(swapchain->vk_surface);
+    VkSwapchainImageDetails details = QueryVkSwapchainImageDetails(swapchain->window, swapchain->vk_surface);
+
+    VkSwapchainCreateInfoKHR create_info{};
+    create_info.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
+    create_info.pNext = nullptr;
+    create_info.flags = 0;
+
+    create_info.surface = swapchain->vk_surface;
+    create_info.minImageCount = details.image_count;
+    create_info.imageFormat = swapchain->vk_surface_format.format;
+    create_info.imageColorSpace = swapchain->vk_surface_format.colorSpace;
+    create_info.imageExtent = *(VkExtent2D*)&details.extent;
+    create_info.imageArrayLayers = 1;
+    create_info.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+
+    if (context.universal_queue.vk_family_index != context.present_queue.vk_family_index) {
+        uint32_t family_indices[] = {context.universal_queue.vk_family_index, context.present_queue.vk_family_index};
+        create_info.imageSharingMode = VK_SHARING_MODE_CONCURRENT;
+        create_info.queueFamilyIndexCount = 2;
+        create_info.pQueueFamilyIndices = family_indices;
+    } else {
+        create_info.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        create_info.queueFamilyIndexCount = 0;
+        create_info.pQueueFamilyIndices = nullptr;
+    }
+    create_info.preTransform = details.pre_transform;
+    create_info.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+    create_info.clipped = VK_TRUE;
+    create_info.oldSwapchain = VK_NULL_HANDLE;
+
+    auto result = vkCreateSwapchainKHR(context.vk_device, &create_info, nullptr, &swapchain->vk_swapchain);
+    if (result != VK_SUCCESS) {
+        RENDER_LOG_ERROR("SWAPCHAIN CREATION: Failed to Create VkSwapchainKHR!");
+    }
+    uint32_t image_count;
+    vkGetSwapchainImagesKHR(context.vk_device, swapchain->vk_swapchain, &image_count, nullptr);
+    swapchain->vk_images.resize(image_count);
+    vkGetSwapchainImagesKHR(context.vk_device, swapchain->vk_swapchain, &image_count, swapchain->vk_images.data());
+
+    CreateSwapchainVkImageViews(swapchain);
+}
+void FinalizeSwapchain(Swapchain* swapchain) {
+    for (VkImageView image_view : swapchain->vk_image_views) {
+        vkDestroyImageView(render::context.vk_device, image_view, nullptr);
+    }
+    vkDestroySwapchainKHR(context.vk_device, swapchain->vk_swapchain, nullptr);
+    vkDestroySurfaceKHR(context.vk_instance, swapchain->vk_surface, nullptr);
+}
+Swapchain* CreateSwapchain(core::Window window) {
+    Swapchain* swapchain = new Swapchain{window};
+    InitializeSwapchain(swapchain);
+    return swapchain;
+}
+void DestroySwapchain(Swapchain* swapchain) {
+    FinalizeSwapchain(swapchain);
+    delete swapchain;
+}
+
+namespace swapchain {
+void Recreate(Swapchain* swapchain) {
+    RENDER_LOG_INFO("SWAPCHAIN RECREATION TRIGGERED");
+    FinalizeSwapchain(swapchain);
+    InitializeSwapchain(swapchain);
+};
+void AcquireImage(Swapchain* swapchain, uint32_t* image_index) {
+    VkResult result = vkAcquireNextImageKHR(context.vk_device, swapchain->vk_swapchain, UINT64_MAX,
+                                            VK_NULL_HANDLE /*SEMAPHORE*/, VK_NULL_HANDLE /*FENCE*/, image_index);
+    if (result == VK_ERROR_OUT_OF_DATE_KHR) {
+        RENDER_LOG_INFO("SWAPCHAIN IMAGE ACQUISITION: Swapchain Out of Date");
+        Recreate(swapchain);
+    } else if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
+        RENDER_LOG_ERROR("SWAPCHAIN IMAGE ACQUISITION: Failed to Acquire Swapchain Image!");
+    }
+}
+} // namespace swapchain
+
+namespace command {}
+
+uint32_t frame;
+void EndFrame() {
+    frame = (frame + 1) % MAX_FRAMES_IN_FLIGHT;
+    frame_loop_function_queue_mutex.lock();
+    for (auto function : frame_loop_function_queue[frame]) {
+        function();
+    }
+    frame_loop_function_queue[frame] = {};
+    frame_loop_function_queue_mutex.unlock();
+}
+
+std::mutex frame_loop_function_queue_mutex;
+std::deque<std::function<void()>> frame_loop_function_queue[MAX_FRAMES_IN_FLIGHT];
+void EnqueueFrameLoopFunction(std::function<void()> function) {
+    frame_loop_function_queue_mutex.lock();
+    frame_loop_function_queue[render::frame].emplace_back(function);
+    frame_loop_function_queue_mutex.unlock();
+}
 } // namespace render

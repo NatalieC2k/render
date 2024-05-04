@@ -32,5 +32,10 @@ struct Window {
 Window CreateWindow(WindowInfo info);
 void DestroyWindow(Window window);
 
-void GetInstanceExtensions(Window window, unsigned int* pCount, const char** pNames);
+namespace window {
+Extent2D GetFramebufferExtent(Window window);
+
+void GetRequiredVkInstanceExtensions(Window window, unsigned int* pCount, const char** pNames);
+void CreateVkSurface(Window window, void* vk_instance, void* vk_surface);
+} // namespace window
 } // namespace core

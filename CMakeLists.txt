@@ -28,7 +28,7 @@ include_directories(${Vulkan_INCLUDE_DIRS})
 
 add_subdirectory(${CMAKE_SOURCE_DIR}/vendor/VulkanMemoryAllocator)
 
-target_link_libraries(engine PUBLIC Vulkan::Vulkan VulkanMemoryAllocator)
+target_link_libraries(engine PUBLIC Vulkan::Vulkan GPUOpen::VulkanMemoryAllocator)
 
 
 include_directories(vendor/stb)

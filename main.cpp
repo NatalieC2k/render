@@ -1,19 +1,33 @@
 #include "include/render.h"
 #include "include/window.h"
 
-core::Window window;
+core::Window window{};
+render::Swapchain* swapchain{};
+
+render::CommandPool* command_pool;
 void Initialize() {
     core::Initialize();
 
     core::WindowInfo window_info{};
     window_info.extent = {1000, 700};
     window_info.offset = {0, 0};
+    window_info.flags = (core::WindowFlags)(SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE);
     window = core::CreateWindow(window_info);
 
     RENDER_LOG_INITIALIZE
-    render::context = render::CreateContext({});
+    render::ContextInfo context_info{};
+    context_info.window = window;
+    context_info.enable_validation_layers = true;
+    render::context = render::CreateContext(context_info);
+
+    swapchain = render::CreateSwapchain(window);
+
+    command_pool = render::CreateCommandPool();
 }
 void Finalize() {
+    render::DestroyCommandPool(command_pool);
+
+    render::DestroySwapchain(swapchain);
     render::DestroyContext(render::context);
     RENDER_LOG_FINALIZE
 
@@ -25,6 +39,26 @@ void Finalize() {
 int main(int argc, char** argv) {
     Initialize();
 
+    auto command_buffer = render::command_pool::BorrowCommandBuffer(command_pool);
+    bool running = true;
+    while (running) {
+        SDL_Event e{};
+        while (SDL_PollEvent(&e)) {
+            if (e.type == SDL_WINDOWEVENT) {
+                if (e.window.event == SDL_WINDOWEVENT_SIZE_CHANGED) {
+                    render::swapchain::Recreate(swapchain);
+                }
+            }
+            if (e.type == SDL_QUIT) {
+                running = false;
+            }
+        }
+        render::command_pool::RecordAsync(command_pool, []() {
+
+        });
+        render::EndFrame();
+    }
+    render::command_pool::ReturnCommandBuffer(command_pool, command_buffer);
     Finalize();
 }
 /*render::Swapchain* swapchain = render::CreateSwapchain(window);
