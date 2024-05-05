@@ -26,8 +26,8 @@
 
 #define RENDER_LOG_INITIALIZE                                                                                          \
     render::logger = spdlog::stdout_logger_mt("render");                                                               \
-    render::logger->info("render log initialized!");
-#define RENDER_LOG_FINALIZE render::logger->info("render log finalized!");
+    render::logger->info("RENDER LOG INITIALIZED!");
+#define RENDER_LOG_FINALIZE render::logger->info("RENDER LOG FINALIZED!");
 
 #define RENDER_LOG_INFO(...) render::logger->info(__VA_ARGS__)
 #define RENDER_LOG_ERROR(...) render::logger->error(__VA_ARGS__)
@@ -101,7 +101,6 @@ struct CommandPool {
 };
 CommandPool* CreateCommandPool();
 void DestroyCommandPool(CommandPool* pool);
-
 namespace command_pool {
 CommandBuffer* BorrowCommandBuffer(CommandPool* pool);
 void ReturnCommandBuffer(CommandPool* pool, CommandBuffer* command_buffer);
@@ -111,24 +110,95 @@ void RecordAsync(CommandPool* pool, std::function<void()> function);
 void RecordThreadFunction(CommandPool* pool);
 } // namespace command_pool
 
+enum class LoadOp {
+    LOAD = 0,
+    CLEAR = 1,
+    DONT_CARE = 2,
+};
+enum class StoreOp {
+    DONT_CARE,
+    STORE,
+};
+struct Attachment {
+    VkImageLayout initial_layout;
+    VkImageLayout final_layout;
+    VkFormat format;
+    // depth_attachment_description.samples = VK_SAMPLE_COUNT_1_BIT;
+    LoadOp load_op;
+    StoreOp store_op;
+
+    // depth_attachment_description.stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    // depth_attachment_description.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+};
+struct SwapchainAttachment {
+    VkImageLayout initial_layout;
+    VkImageLayout final_layout;
+
+    LoadOp load_op;
+    StoreOp store_op;
+
+    void* swapchain = nullptr;
+};
+struct AttachmentReference {
+    uint32_t index;
+    VkImageLayout layout;
+};
+struct Subpass {
+    std::vector<AttachmentReference> input_attachments;
+    std::vector<AttachmentReference> color_attachments;
+    AttachmentReference* depth_stencil_attachment = nullptr;
+};
+struct RenderpassInfo {
+    Extent3D extent{};
+    std::vector<Attachment> attachments{};
+    std::vector<Subpass> subpasses{};
+    SwapchainAttachment* swapchain_attachment = nullptr;
+};
+struct Renderpass {
+    std::optional<RenderpassInfo> recreation_info;
+    VkRenderPass vk_render_pass;
+};
+namespace renderpass {}
+Renderpass* CreateRenderpass(RenderpassInfo info);
+void DestroyRenderpass(Renderpass* renderpass);
+
+struct FramebufferInfo {
+    Renderpass* renderpass = nullptr;
+    std::vector<VkImageView> attachments{};
+    void* swapchain_attachment = nullptr;
+};
+struct Framebuffer {
+    std::optional<FramebufferInfo> recreation_info{};
+    std::vector<VkFramebuffer> vk_framebuffer{};
+};
+Framebuffer* CreateFramebuffer(FramebufferInfo info);
+void DestroyFramebuffer(Framebuffer* framebuffer);
+
 struct Semaphore {};
 struct Fence {};
 
 struct Swapchain {
     core::Window window;
 
+    Extent3D extent;
     VkSurfaceKHR vk_surface;
     VkSurfaceFormatKHR vk_surface_format;
     VkSwapchainKHR vk_swapchain;
     std::vector<VkImage> vk_images;
     std::vector<VkImageView> vk_image_views;
+
+    std::vector<Renderpass*> tied_renderpasses;
+    std::vector<Framebuffer*> tied_framebuffers;
 };
-Swapchain* CreateSwapchain(core::Window window);
-void DestroySwapchain(Swapchain* swapchain);
 namespace swapchain {
+void Initialize(Swapchain* swapchain);
+void Finalize(Swapchain* swapchain);
+
 void Recreate(Swapchain* swapchain);
 void AcquireImage(Swapchain* swapchain, uint32_t* image_index);
 } // namespace swapchain
+Swapchain* CreateSwapchain(core::Window window);
+void DestroySwapchain(Swapchain* swapchain);
 
 namespace command {}
 

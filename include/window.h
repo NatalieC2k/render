@@ -11,7 +11,11 @@ struct Extent2D {
     uint32_t x;
     uint32_t y;
 };
-
+struct Extent3D {
+    uint32_t x;
+    uint32_t y;
+    uint32_t z;
+};
 namespace core {
 void Initialize();
 void Finalize();

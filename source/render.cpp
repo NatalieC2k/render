@@ -381,6 +381,137 @@ void RecordAsync(CommandPool* pool, std::function<void()> function) {
 }
 } // namespace command_pool
 
+namespace renderpass {
+void Initialize(Renderpass* renderpass, RenderpassInfo info) {
+    std::vector<VkAttachmentDescription> vk_attachment_descriptions{};
+    for (Attachment& attachment : info.attachments) {
+        VkAttachmentDescription vk_attachment{};
+        vk_attachment.flags = 0;
+        vk_attachment.initialLayout = attachment.initial_layout;
+        vk_attachment.finalLayout = attachment.final_layout;
+        vk_attachment.format = attachment.format;
+        vk_attachment.loadOp = (VkAttachmentLoadOp)attachment.load_op;
+        vk_attachment.storeOp = (VkAttachmentStoreOp)attachment.store_op;
+        vk_attachment.samples = VK_SAMPLE_COUNT_1_BIT;
+        vk_attachment_descriptions.emplace_back(vk_attachment);
+    }
+    if (info.swapchain_attachment != nullptr) {
+        VkAttachmentDescription vk_attachment{};
+        vk_attachment.flags = 0;
+        vk_attachment.initialLayout = info.swapchain_attachment->initial_layout;
+        vk_attachment.finalLayout = info.swapchain_attachment->final_layout;
+        vk_attachment.format =
+            reinterpret_cast<Swapchain*>(info.swapchain_attachment->swapchain)->vk_surface_format.format;
+        vk_attachment.loadOp = (VkAttachmentLoadOp)info.swapchain_attachment->load_op;
+        vk_attachment.storeOp = (VkAttachmentStoreOp)info.swapchain_attachment->store_op;
+        vk_attachment.samples = VK_SAMPLE_COUNT_1_BIT;
+        vk_attachment_descriptions.emplace_back(vk_attachment);
+    }
+
+    std::vector<VkSubpassDescription> vk_subpass_descriptions{};
+    for (Subpass& subpass : info.subpasses) {
+        VkSubpassDescription vk_subpass{};
+        vk_subpass.flags = 0;
+        vk_subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+        vk_subpass.colorAttachmentCount = (uint32_t)subpass.color_attachments.size();
+        vk_subpass.pColorAttachments = (VkAttachmentReference*)subpass.color_attachments.data();
+        vk_subpass.pDepthStencilAttachment = (VkAttachmentReference*)subpass.depth_stencil_attachment;
+        vk_subpass_descriptions.emplace_back(vk_subpass);
+    }
+
+    VkRenderPassCreateInfo create_info{};
+    create_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+    create_info.pNext = nullptr;
+    create_info.flags = 0;
+    create_info.attachmentCount = (uint32_t)vk_attachment_descriptions.size();
+    create_info.pAttachments = vk_attachment_descriptions.data();
+    create_info.subpassCount = (uint32_t)vk_subpass_descriptions.size();
+    create_info.pSubpasses = vk_subpass_descriptions.data();
+    create_info.dependencyCount = 0;
+    create_info.pDependencies = nullptr;
+    VkResult result = vkCreateRenderPass(context.vk_device, &create_info, nullptr, &renderpass->vk_render_pass);
+    if (result != VK_SUCCESS) {
+        RENDER_LOG_ERROR("RENDERPASS CREATION: Failed to Create VKRenderPass!");
+    }
+}
+void Finalize(Renderpass* renderpass) {
+    vkDestroyRenderPass(render::context.vk_device, renderpass->vk_render_pass, nullptr);
+}
+void Recreate(Renderpass* renderpass) {
+    Finalize(renderpass);
+    Initialize(renderpass, *renderpass->recreation_info);
+}
+} // namespace renderpass
+Renderpass* CreateRenderpass(RenderpassInfo info) {
+    auto renderpass = new Renderpass{};
+    renderpass->recreation_info = info;
+    renderpass::Initialize(renderpass, info);
+    return renderpass;
+}
+void DestroyRenderpass(Renderpass* renderpass) {
+    renderpass::Finalize(renderpass);
+    delete renderpass;
+}
+
+namespace framebuffer {
+void Initialize(Framebuffer* framebuffer, FramebufferInfo info) {
+    VkFramebufferCreateInfo create_info{};
+    create_info.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+    create_info.flags = 0;
+    create_info.pNext = nullptr;
+
+    create_info.renderPass = info.renderpass->vk_render_pass;
+
+    if (info.swapchain_attachment != nullptr) {
+        Swapchain* swapchain_attachment = (Swapchain*)info.swapchain_attachment;
+        create_info.width = swapchain_attachment->extent.x;
+        create_info.height = swapchain_attachment->extent.y;
+        create_info.layers = swapchain_attachment->extent.z;
+
+        uint32_t swapchain_attachment_index = info.attachments.size();
+        info.attachments.emplace_back(VkImageView{VK_NULL_HANDLE});
+        create_info.attachmentCount = info.attachments.size();
+        create_info.pAttachments = info.attachments.data();
+        for (auto view : swapchain_attachment->vk_image_views) {
+            info.attachments[swapchain_attachment_index] = view;
+            VkFramebuffer vk_framebuffer = VK_NULL_HANDLE;
+            VkResult result = vkCreateFramebuffer(context.vk_device, &create_info, nullptr, &vk_framebuffer);
+            if (result != VK_SUCCESS) {
+                RENDER_LOG_ERROR("RENDERPASS CREATION: Failed to Create VKRenderPass!");
+            }
+            framebuffer->vk_framebuffer.emplace_back(vk_framebuffer);
+        }
+        return;
+    }
+
+    create_info.attachmentCount = info.attachments.size();
+    create_info.pAttachments = info.attachments.data();
+
+    VkFramebuffer vk_framebuffer = VK_NULL_HANDLE;
+    VkResult result = vkCreateFramebuffer(context.vk_device, &create_info, nullptr, &vk_framebuffer);
+    if (result != VK_SUCCESS) {
+        RENDER_LOG_ERROR("RENDERPASS CREATION: Failed to Create VKRenderPass!");
+    }
+    framebuffer->vk_framebuffer.emplace_back(vk_framebuffer);
+    return;
+}
+void Finalize(Framebuffer* framebuffer) {
+    for (auto vk_framebuffer : framebuffer->vk_framebuffer) {
+        vkDestroyFramebuffer(context.vk_device, vk_framebuffer, nullptr);
+    }
+}
+} // namespace framebuffer
+Framebuffer* CreateFramebuffer(FramebufferInfo info) {
+    auto framebuffer = new Framebuffer{};
+    framebuffer->recreation_info = info;
+    framebuffer::Initialize(framebuffer, info);
+    return framebuffer;
+}
+void DestroyFramebuffer(Framebuffer* framebuffer) {
+    framebuffer::Finalize(framebuffer);
+    delete framebuffer;
+}
+
 VkSurfaceFormatKHR SelectVkSwapchainSurfaceFormat(VkSurfaceKHR vk_surface) {
     uint32_t available_format_count;
     vkGetPhysicalDeviceSurfaceFormatsKHR(render::context.vk_physical_device, vk_surface, &available_format_count,
@@ -467,7 +598,8 @@ void CreateSwapchainVkImageViews(Swapchain* swapchain) {
         vkCreateImageView(render::context.vk_device, &create_info, nullptr, &swapchain->vk_image_views[i]);
     }
 }
-void InitializeSwapchain(Swapchain* swapchain) {
+namespace swapchain {
+void Initialize(Swapchain* swapchain) {
     core::window::CreateVkSurface(swapchain->window, &context.vk_instance, &swapchain->vk_surface);
     if (swapchain->vk_surface == VK_NULL_HANDLE) {
         RENDER_LOG_ERROR("SWAPCHAIN CREATION: Failed to Create VkSurfaceKHR!");
@@ -476,6 +608,7 @@ void InitializeSwapchain(Swapchain* swapchain) {
     auto present_mode = SelectVkSwapchainPresentMode(swapchain->vk_surface);
     VkSwapchainImageDetails details = QueryVkSwapchainImageDetails(swapchain->window, swapchain->vk_surface);
 
+    swapchain->extent = {details.extent.x, details.extent.y, 1};
     VkSwapchainCreateInfoKHR create_info{};
     create_info.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
     create_info.pNext = nullptr;
@@ -488,7 +621,6 @@ void InitializeSwapchain(Swapchain* swapchain) {
     create_info.imageExtent = *(VkExtent2D*)&details.extent;
     create_info.imageArrayLayers = 1;
     create_info.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-
     if (context.universal_queue.vk_family_index != context.present_queue.vk_family_index) {
         uint32_t family_indices[] = {context.universal_queue.vk_family_index, context.present_queue.vk_family_index};
         create_info.imageSharingMode = VK_SHARING_MODE_CONCURRENT;
@@ -515,28 +647,18 @@ void InitializeSwapchain(Swapchain* swapchain) {
 
     CreateSwapchainVkImageViews(swapchain);
 }
-void FinalizeSwapchain(Swapchain* swapchain) {
+void Finalize(Swapchain* swapchain) {
     for (VkImageView image_view : swapchain->vk_image_views) {
         vkDestroyImageView(render::context.vk_device, image_view, nullptr);
     }
     vkDestroySwapchainKHR(context.vk_device, swapchain->vk_swapchain, nullptr);
     vkDestroySurfaceKHR(context.vk_instance, swapchain->vk_surface, nullptr);
 }
-Swapchain* CreateSwapchain(core::Window window) {
-    Swapchain* swapchain = new Swapchain{window};
-    InitializeSwapchain(swapchain);
-    return swapchain;
-}
-void DestroySwapchain(Swapchain* swapchain) {
-    FinalizeSwapchain(swapchain);
-    delete swapchain;
-}
 
-namespace swapchain {
 void Recreate(Swapchain* swapchain) {
     RENDER_LOG_INFO("SWAPCHAIN RECREATION TRIGGERED");
-    FinalizeSwapchain(swapchain);
-    InitializeSwapchain(swapchain);
+    Finalize(swapchain);
+    Initialize(swapchain);
 };
 void AcquireImage(Swapchain* swapchain, uint32_t* image_index) {
     VkResult result = vkAcquireNextImageKHR(context.vk_device, swapchain->vk_swapchain, UINT64_MAX,
@@ -549,6 +671,15 @@ void AcquireImage(Swapchain* swapchain, uint32_t* image_index) {
     }
 }
 } // namespace swapchain
+Swapchain* CreateSwapchain(core::Window window) {
+    Swapchain* swapchain = new Swapchain{window};
+    swapchain::Initialize(swapchain);
+    return swapchain;
+}
+void DestroySwapchain(Swapchain* swapchain) {
+    swapchain::Finalize(swapchain);
+    delete swapchain;
+}
 
 namespace command {}
 

@@ -4,6 +4,9 @@
 core::Window window{};
 render::Swapchain* swapchain{};
 
+render::Renderpass* renderpass;
+render::Framebuffer* framebuffer;
+
 render::CommandPool* command_pool;
 void Initialize() {
     core::Initialize();
@@ -21,11 +24,30 @@ void Initialize() {
     render::context = render::CreateContext(context_info);
 
     swapchain = render::CreateSwapchain(window);
+    render::SwapchainAttachment swapchain_attachment = {
+        VK_IMAGE_LAYOUT_UNDEFINED,
+        VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+        render::LoadOp::CLEAR,
+        render::StoreOp::STORE,
+        swapchain,
+    };
+    renderpass = render::CreateRenderpass({swapchain->extent,
+                                           {},
+                                           {{
+                                               {{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL}},
+                                               {},
+                                               nullptr,
+                                           }},
+                                           &swapchain_attachment});
+    framebuffer = render::CreateFramebuffer({renderpass, {}, swapchain});
 
     command_pool = render::CreateCommandPool();
 }
 void Finalize() {
     render::DestroyCommandPool(command_pool);
+
+    render::DestroyFramebuffer(framebuffer);
+    render::DestroyRenderpass(renderpass);
 
     render::DestroySwapchain(swapchain);
     render::DestroyContext(render::context);
