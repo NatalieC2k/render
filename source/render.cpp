@@ -452,6 +452,7 @@ void DestroyRenderpass(Renderpass* renderpass) {
     renderpass::Finalize(renderpass);
     delete renderpass;
 }
+void CreateInstance();
 
 namespace framebuffer {
 void Initialize(Framebuffer* framebuffer, FramebufferInfo info) {

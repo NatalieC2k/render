@@ -158,7 +158,9 @@ struct Renderpass {
     std::optional<RenderpassInfo> recreation_info;
     VkRenderPass vk_render_pass;
 };
-namespace renderpass {}
+namespace renderpass {
+typedef uint32_t InstanceIndex;
+}
 Renderpass* CreateRenderpass(RenderpassInfo info);
 void DestroyRenderpass(Renderpass* renderpass);
 

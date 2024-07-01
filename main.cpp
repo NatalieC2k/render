@@ -5,6 +5,7 @@ core::Window window{};
 render::Swapchain* swapchain{};
 
 render::Renderpass* renderpass;
+render::renderpass::InstanceIndex;
 render::Framebuffer* framebuffer;
 
 render::CommandPool* command_pool;
