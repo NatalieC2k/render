@@ -86,17 +86,20 @@ Context CreateContext(ContextInfo info);
 void DestroyContext(Context context);
 
 struct CommandBuffer {
-    bool complete = false;
+    bool completion_flag = false;
     VkCommandBuffer vk_command_buffer = VK_NULL_HANDLE;
 };
 struct CommandPool {
     VkCommandPool vk_command_pool = VK_NULL_HANDLE;
     std::deque<CommandBuffer*> free_command_buffer_queue{};
 
-    bool active;
+    bool active = true;
     std::thread record_thread{};
     std::mutex mutex{};
     std::condition_variable condition_variable{};
+
+    std::mutex completion_mutex{};
+    std::condition_variable completion_condition_variable{};
     std::deque<std::function<void()>> record_queue{};
 };
 CommandPool* CreateCommandPool();
@@ -106,9 +109,30 @@ CommandBuffer* BorrowCommandBuffer(CommandPool* pool);
 void ReturnCommandBuffer(CommandPool* pool, CommandBuffer* command_buffer);
 
 void RecordAsync(CommandPool* pool, std::function<void()> function);
+void AwaitRecord(CommandPool* pool, CommandBuffer* command_buffer);
 
 void RecordThreadFunction(CommandPool* pool);
 } // namespace command_pool
+
+struct Swapchain {
+    core::Window window;
+
+    Extent3D extent;
+    VkSurfaceKHR vk_surface;
+    VkSurfaceFormatKHR vk_surface_format;
+    VkSwapchainKHR vk_swapchain;
+    std::vector<VkImage> vk_images;
+    std::vector<VkImageView> vk_image_views;
+};
+namespace swapchain {
+void Initialize(Swapchain* swapchain);
+void Finalize(Swapchain* swapchain);
+
+void Recreate(Swapchain* swapchain);
+void AcquireImage(Swapchain* swapchain, uint32_t* image_index);
+} // namespace swapchain
+Swapchain* CreateSwapchain(core::Window window);
+void DestroySwapchain(Swapchain* swapchain);
 
 enum class LoadOp {
     LOAD = 0,
@@ -167,7 +191,8 @@ void DestroyRenderpass(Renderpass* renderpass);
 struct FramebufferInfo {
     Renderpass* renderpass = nullptr;
     std::vector<VkImageView> attachments{};
-    void* swapchain_attachment = nullptr;
+    Extent3D extent{};
+    Swapchain* swapchain = nullptr;
 };
 struct Framebuffer {
     std::optional<FramebufferInfo> recreation_info{};
@@ -176,35 +201,55 @@ struct Framebuffer {
 Framebuffer* CreateFramebuffer(FramebufferInfo info);
 void DestroyFramebuffer(Framebuffer* framebuffer);
 
-struct Semaphore {};
-struct Fence {};
-
-struct Swapchain {
-    core::Window window;
-
-    Extent3D extent;
-    VkSurfaceKHR vk_surface;
-    VkSurfaceFormatKHR vk_surface_format;
-    VkSwapchainKHR vk_swapchain;
-    std::vector<VkImage> vk_images;
-    std::vector<VkImageView> vk_image_views;
-
-    std::vector<Renderpass*> tied_renderpasses;
-    std::vector<Framebuffer*> tied_framebuffers;
+struct Semaphore {
+    VkSemaphore vk_semaphore;
 };
-namespace swapchain {
-void Initialize(Swapchain* swapchain);
-void Finalize(Swapchain* swapchain);
+namespace semaphore {
+void Initialize(Semaphore* pointer);
+void Finalize(Semaphore* pointer);
+} // namespace semaphore
+Semaphore* CreateSemaphore();
+void DestroySemaphore(Semaphore* semaphore);
 
-void Recreate(Swapchain* swapchain);
-void AcquireImage(Swapchain* swapchain, uint32_t* image_index);
-} // namespace swapchain
-Swapchain* CreateSwapchain(core::Window window);
-void DestroySwapchain(Swapchain* swapchain);
+struct Fence {
+    bool submission_flag = true;
+    VkFence vk_fence = VK_NULL_HANDLE;
+};
+namespace fence {
+enum FenceInitializationState {
+    INITIALIZE_UNSIGNALED = 0,
+    INITIALIZE_SIGNALED = 1,
+};
+void Initialize(Fence* pointer, FenceInitializationState init_state);
+void Finalize(Fence* pointer);
 
-namespace command {}
+void Await(Fence* fence);
+void Reset(Fence* fence);
+} // namespace fence
+Fence* CreateFence(fence::FenceInitializationState init_state);
+void DestroyFence(Fence* fence);
 
-struct SubmitInfo {};
+namespace command {
+void BeginCommandBuffer(CommandBuffer* command_buffer);
+void EndCommandBuffer(CommandPool* pool, CommandBuffer* command_buffer);
+
+void ResetCommandBuffer(CommandBuffer* command_buffer);
+} // namespace command
+
+extern std::mutex submission_queue_mutex;
+extern std::deque<std::function<void()>> submission_function_queue;
+
+extern std::mutex submission_mutex;
+extern std::condition_variable submission_condition;
+
+struct SubmitInfo {
+    std::vector<Semaphore> wait_semaphores;
+    VkPipelineStageFlags wait_stage_flags;
+    std::vector<Semaphore> signal_semaphores;
+    Fence* fence;
+    CommandBuffer* command_buffer;
+};
+void SubmissionThread();
 void SubmitUniversal(SubmitInfo submit_info);
 void SubmitCompute(SubmitInfo submit_info);
 void SubmitStaging(SubmitInfo submit_info);

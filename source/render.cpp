@@ -319,7 +319,6 @@ CommandPool* CreateCommandPool() {
         RENDER_LOG_ERROR("COMMAND POOL CREATION: Failed to Create VkCommandPool!");
     }
 
-    pool->active = true;
     pool->record_thread = std::thread(command_pool::RecordThreadFunction, pool);
     return pool;
 }
@@ -328,7 +327,7 @@ void DestroyCommandPool(CommandPool* pool) {
     pool->active = false;
     pool->record_queue.emplace_back([]() {});
     pool->mutex.unlock();
-    pool->condition_variable.notify_one();
+    pool->condition_variable.notify_all();
 
     pool->record_thread.join();
 
@@ -365,19 +364,25 @@ void ReturnCommandBuffer(CommandPool* pool, CommandBuffer* command_buffer) {
 
 void RecordThreadFunction(CommandPool* pool) {
     while (pool->active) {
+        RENDER_LOG_INFO("THREAD IS DOING THING");
         std::unique_lock<std::mutex> lock(pool->mutex);
         pool->condition_variable.wait(lock, [pool]() { return pool->record_queue.size() != 0; });
         auto function = pool->record_queue.back();
         pool->record_queue.pop_back();
         function();
         lock.unlock();
+        RENDER_LOG_INFO("THREAD HAS DONE THING");
     }
 }
 void RecordAsync(CommandPool* pool, std::function<void()> function) {
     pool->mutex.lock();
     pool->record_queue.emplace_back(function);
     pool->mutex.unlock();
-    pool->condition_variable.notify_one();
+    pool->condition_variable.notify_all();
+}
+void AwaitRecord(CommandPool* pool, CommandBuffer* command_buffer) {
+    std::unique_lock<std::mutex> lock(pool->completion_mutex);
+    pool->completion_condition_variable.wait(lock, [command_buffer] { return command_buffer->completion_flag; });
 }
 } // namespace command_pool
 
@@ -462,18 +467,18 @@ void Initialize(Framebuffer* framebuffer, FramebufferInfo info) {
     create_info.pNext = nullptr;
 
     create_info.renderPass = info.renderpass->vk_render_pass;
+    create_info.width = info.extent.x;
+    create_info.height = info.extent.y;
+    create_info.layers = info.extent.z;
 
-    if (info.swapchain_attachment != nullptr) {
-        Swapchain* swapchain_attachment = (Swapchain*)info.swapchain_attachment;
-        create_info.width = swapchain_attachment->extent.x;
-        create_info.height = swapchain_attachment->extent.y;
-        create_info.layers = swapchain_attachment->extent.z;
+    if (info.swapchain != nullptr) {
+        Swapchain* swapchain = (Swapchain*)info.swapchain;
 
         uint32_t swapchain_attachment_index = info.attachments.size();
         info.attachments.emplace_back(VkImageView{VK_NULL_HANDLE});
         create_info.attachmentCount = info.attachments.size();
         create_info.pAttachments = info.attachments.data();
-        for (auto view : swapchain_attachment->vk_image_views) {
+        for (auto view : swapchain->vk_image_views) {
             info.attachments[swapchain_attachment_index] = view;
             VkFramebuffer vk_framebuffer = VK_NULL_HANDLE;
             VkResult result = vkCreateFramebuffer(context.vk_device, &create_info, nullptr, &vk_framebuffer);
@@ -682,7 +687,130 @@ void DestroySwapchain(Swapchain* swapchain) {
     delete swapchain;
 }
 
-namespace command {}
+namespace semaphore {
+void Initialize(Semaphore* pointer) {
+    VkSemaphoreCreateInfo semaphore_create_info{};
+    semaphore_create_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+    semaphore_create_info.pNext = nullptr;
+    semaphore_create_info.flags = 0;
+    vkCreateSemaphore(render::context.vk_device, &semaphore_create_info, nullptr, &pointer->vk_semaphore);
+}
+void Finalize(Semaphore* pointer) { vkDestroySemaphore(render::context.vk_device, pointer->vk_semaphore, nullptr); }
+} // namespace semaphore
+Semaphore* CreateSemaphore() {
+    auto semaphore = new Semaphore{};
+    semaphore::Initialize(semaphore);
+    return semaphore;
+}
+void DestroySemaphore(Semaphore* semaphore) {
+    semaphore::Finalize(semaphore);
+    delete semaphore;
+}
+
+namespace fence {
+void Initialize(Fence* pointer, FenceInitializationState init_state) {
+    VkFenceCreateInfo fence_create_info{};
+    fence_create_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+    fence_create_info.pNext = nullptr;
+    fence_create_info.flags = init_state;
+    vkCreateFence(render::context.vk_device, &fence_create_info, nullptr, &pointer->vk_fence);
+}
+void Finalize(Fence* pointer) { vkDestroyFence(render::context.vk_device, pointer->vk_fence, nullptr); }
+
+void Await(Fence* fence) {
+    std::unique_lock<std::mutex> lock(submission_mutex);
+    submission_condition.wait(lock, [fence] { return fence->submission_flag; });
+    lock.unlock();
+    vkWaitForFences(render::context.vk_device, 1, &fence->vk_fence, VK_TRUE, UINT64_MAX);
+}
+void Reset(Fence* fence) {
+    submission_mutex.lock();
+    fence->submission_flag = false;
+    vkResetFences(render::context.vk_device, 1, &fence->vk_fence);
+    submission_mutex.unlock();
+}
+} // namespace fence
+Fence* CreateFence(fence::FenceInitializationState init_state) {
+    auto fence = new Fence{};
+    fence::Initialize(fence, init_state);
+    return fence;
+}
+void DestroyFence(Fence* fence) {
+    fence::Finalize(fence);
+    delete fence;
+}
+
+namespace command {
+void BeginCommandBuffer(CommandBuffer* command_buffer) {
+    VkCommandBufferBeginInfo begin_info{};
+    begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    begin_info.pNext = nullptr;
+    begin_info.flags = 0;
+    begin_info.pInheritanceInfo = nullptr;
+    vkBeginCommandBuffer(command_buffer->vk_command_buffer, &begin_info);
+}
+void EndCommandBuffer(CommandPool* pool, CommandBuffer* command_buffer) {
+    vkEndCommandBuffer(command_buffer->vk_command_buffer);
+    pool->completion_mutex.lock();
+    command_buffer->completion_flag = true;
+    pool->completion_mutex.unlock();
+    pool->completion_condition_variable.notify_all();
+};
+
+void ResetCommandBuffer(CommandBuffer* command_buffer) { vkResetCommandBuffer(command_buffer->vk_command_buffer, 0); }
+} // namespace command
+
+std::thread submission_thread = std::thread(SubmissionThread);
+std::mutex submission_queue_mutex{};
+std::deque<std::function<void()>> submission_function_queue{};
+
+std::mutex submission_mutex{};
+std::condition_variable submission_condition{};
+
+void SubmissionThread() {
+    while (true) {
+        submission_queue_mutex.lock();
+        if (submission_function_queue.size() != 0) {
+            std::function<void()> function = submission_function_queue.front();
+            submission_function_queue.pop_front();
+            submission_queue_mutex.unlock();
+            function();
+            continue;
+        }
+        submission_queue_mutex.unlock();
+    }
+}
+void SubmitUniversal(SubmitInfo submit_info) {
+    submission_queue_mutex.lock();
+    submission_function_queue.emplace_back([submit_info]() {
+        VkSubmitInfo vk_submit_info{};
+        vk_submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        vk_submit_info.pNext = nullptr;
+
+        vk_submit_info.waitSemaphoreCount = (uint32_t)submit_info.wait_semaphores.size();
+        vk_submit_info.pWaitSemaphores = (VkSemaphore*)submit_info.wait_semaphores.data();
+        vk_submit_info.pWaitDstStageMask = &submit_info.wait_stage_flags;
+
+        vk_submit_info.signalSemaphoreCount = (uint32_t)submit_info.signal_semaphores.size();
+        vk_submit_info.pSignalSemaphores = (VkSemaphore*)submit_info.signal_semaphores.data();
+
+        vk_submit_info.commandBufferCount = 1;
+        vk_submit_info.pCommandBuffers = &submit_info.command_buffer->vk_command_buffer;
+
+        vkQueueSubmit(render::context.universal_queue.vk_queue, 1, &vk_submit_info, submit_info.fence->vk_fence);
+
+        if (submit_info.fence != nullptr) {
+            submission_mutex.lock();
+            submit_info.fence->submission_flag = true;
+            submission_mutex.unlock();
+
+            submission_condition.notify_all();
+        }
+    });
+    submission_queue_mutex.unlock();
+}
+void SubmitCompute(SubmitInfo submit_info) {}
+void SubmitStaging(SubmitInfo submit_info) {}
 
 uint32_t frame;
 void EndFrame() {

@@ -9,6 +9,9 @@ render::renderpass::InstanceIndex;
 render::Framebuffer* framebuffer;
 
 render::CommandPool* command_pool;
+
+render::Fence* fence;
+
 void Initialize() {
     core::Initialize();
 
@@ -40,11 +43,18 @@ void Initialize() {
                                                nullptr,
                                            }},
                                            &swapchain_attachment});
-    framebuffer = render::CreateFramebuffer({renderpass, {}, swapchain});
+    auto framebuffer_info = render::FramebufferInfo{};
+    framebuffer_info.renderpass = renderpass;
+    framebuffer_info.swapchain = swapchain;
+    framebuffer_info.extent = swapchain->extent;
+    framebuffer = render::CreateFramebuffer(framebuffer_info);
 
     command_pool = render::CreateCommandPool();
+
+    fence = render::CreateFence(render::fence::INITIALIZE_SIGNALED);
 }
 void Finalize() {
+    render::DestroyFence(fence);
     render::DestroyCommandPool(command_pool);
 
     render::DestroyFramebuffer(framebuffer);
@@ -76,11 +86,16 @@ int main(int argc, char** argv) {
                 running = false;
             }
         }
-        render::command_pool::RecordAsync(command_pool, []() {
+        render::command_pool::RecordAsync(command_pool, [command_buffer]() {
+            render::command::ResetCommandBuffer(command_buffer);
 
+            render::command::BeginCommandBuffer(command_buffer);
+            render::command::EndCommandBuffer(command_pool, command_buffer);
         });
+        render::command_pool::AwaitRecord(command_pool, command_buffer);
         render::EndFrame();
     }
+
     render::command_pool::ReturnCommandBuffer(command_pool, command_buffer);
     Finalize();
 }
