@@ -364,14 +364,13 @@ void ReturnCommandBuffer(CommandPool* pool, CommandBuffer* command_buffer) {
 
 void RecordThreadFunction(CommandPool* pool) {
     while (pool->active) {
-        RENDER_LOG_INFO("THREAD IS DOING THING");
         std::unique_lock<std::mutex> lock(pool->mutex);
         pool->condition_variable.wait(lock, [pool]() { return pool->record_queue.size() != 0; });
         auto function = pool->record_queue.back();
         pool->record_queue.pop_back();
-        function();
         lock.unlock();
-        RENDER_LOG_INFO("THREAD HAS DONE THING");
+
+        function();
     }
 }
 void RecordAsync(CommandPool* pool, std::function<void()> function) {
@@ -383,6 +382,7 @@ void RecordAsync(CommandPool* pool, std::function<void()> function) {
 void AwaitRecord(CommandPool* pool, CommandBuffer* command_buffer) {
     std::unique_lock<std::mutex> lock(pool->completion_mutex);
     pool->completion_condition_variable.wait(lock, [command_buffer] { return command_buffer->completion_flag; });
+    lock.unlock();
 }
 } // namespace command_pool
 
@@ -725,8 +725,8 @@ void Await(Fence* fence) {
 }
 void Reset(Fence* fence) {
     submission_mutex.lock();
-    fence->submission_flag = false;
     vkResetFences(render::context.vk_device, 1, &fence->vk_fence);
+    fence->submission_flag = false;
     submission_mutex.unlock();
 }
 } // namespace fence
@@ -741,7 +741,7 @@ void DestroyFence(Fence* fence) {
 }
 
 namespace command {
-void BeginCommandBuffer(CommandBuffer* command_buffer) {
+void BeginCommandBuffer(CommandPool* pool, CommandBuffer* command_buffer) {
     VkCommandBufferBeginInfo begin_info{};
     begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     begin_info.pNext = nullptr;
@@ -757,7 +757,12 @@ void EndCommandBuffer(CommandPool* pool, CommandBuffer* command_buffer) {
     pool->completion_condition_variable.notify_all();
 };
 
-void ResetCommandBuffer(CommandBuffer* command_buffer) { vkResetCommandBuffer(command_buffer->vk_command_buffer, 0); }
+void ResetCommandBuffer(CommandPool* pool, CommandBuffer* command_buffer) {
+    pool->completion_mutex.lock();
+    vkResetCommandBuffer(command_buffer->vk_command_buffer, 0);
+    command_buffer->completion_flag = false;
+    pool->completion_mutex.unlock();
+}
 } // namespace command
 
 std::thread submission_thread = std::thread(SubmissionThread);

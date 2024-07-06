@@ -230,10 +230,10 @@ Fence* CreateFence(fence::FenceInitializationState init_state);
 void DestroyFence(Fence* fence);
 
 namespace command {
-void BeginCommandBuffer(CommandBuffer* command_buffer);
+void BeginCommandBuffer(CommandPool* pool, CommandBuffer* command_buffer);
 void EndCommandBuffer(CommandPool* pool, CommandBuffer* command_buffer);
 
-void ResetCommandBuffer(CommandBuffer* command_buffer);
+void ResetCommandBuffer(CommandPool* pool, CommandBuffer* command_buffer);
 } // namespace command
 
 extern std::mutex submission_queue_mutex;

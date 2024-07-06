@@ -75,6 +75,9 @@ int main(int argc, char** argv) {
     auto command_buffer = render::command_pool::BorrowCommandBuffer(command_pool);
     bool running = true;
     while (running) {
+        render::fence::Await(fence);
+        render::fence::Reset(fence);
+
         SDL_Event e{};
         while (SDL_PollEvent(&e)) {
             if (e.type == SDL_WINDOWEVENT) {
@@ -87,12 +90,40 @@ int main(int argc, char** argv) {
             }
         }
         render::command_pool::RecordAsync(command_pool, [command_buffer]() {
-            render::command::ResetCommandBuffer(command_buffer);
+            render::command::ResetCommandBuffer(command_pool, command_buffer);
 
-            render::command::BeginCommandBuffer(command_buffer);
+            render::command::BeginCommandBuffer(command_pool, command_buffer);
+
+            VkRenderPassBeginInfo begin_info{};
+            begin_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+            begin_info.pNext = nullptr;
+
+            begin_info.renderPass = renderpass->vk_render_pass;
+            begin_info.framebuffer = framebuffer->vk_framebuffer[0];
+            begin_info.renderArea = {
+                0,
+                0,
+                swapchain->extent.x,
+                swapchain->extent.y,
+            };
+
+            VkClearValue clear_value[1] = {};
+            clear_value[0] = {1.0f, 0.0f};
+            begin_info.clearValueCount = 1;
+            begin_info.pClearValues = clear_value;
+
+            vkCmdBeginRenderPass(command_buffer->vk_command_buffer, &begin_info, VK_SUBPASS_CONTENTS_INLINE);
+            vkCmdEndRenderPass(command_buffer->vk_command_buffer);
             render::command::EndCommandBuffer(command_pool, command_buffer);
         });
         render::command_pool::AwaitRecord(command_pool, command_buffer);
+
+        auto submit_info = render::SubmitInfo{};
+        submit_info.wait_semaphores = {};
+        submit_info.signal_semaphores = {};
+        submit_info.fence = fence;
+        submit_info.command_buffer = command_buffer;
+        render::SubmitUniversal(submit_info);
         render::EndFrame();
     }
 
