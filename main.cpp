@@ -78,6 +78,8 @@ int main(int argc, char** argv) {
         render::fence::Await(fence);
         render::fence::Reset(fence);
 
+        render::command::ResetCommandBuffer(command_pool, command_buffer);
+
         SDL_Event e{};
         while (SDL_PollEvent(&e)) {
             if (e.type == SDL_WINDOWEVENT) {
@@ -90,10 +92,7 @@ int main(int argc, char** argv) {
             }
         }
         render::command_pool::RecordAsync(command_pool, [command_buffer]() {
-            render::command::ResetCommandBuffer(command_pool, command_buffer);
-
             render::command::BeginCommandBuffer(command_pool, command_buffer);
-
             VkRenderPassBeginInfo begin_info{};
             begin_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
             begin_info.pNext = nullptr;
@@ -116,15 +115,14 @@ int main(int argc, char** argv) {
             vkCmdEndRenderPass(command_buffer->vk_command_buffer);
             render::command::EndCommandBuffer(command_pool, command_buffer);
         });
-        render::command_pool::AwaitRecord(command_pool, command_buffer);
 
         auto submit_info = render::SubmitInfo{};
         submit_info.wait_semaphores = {};
         submit_info.signal_semaphores = {};
         submit_info.fence = fence;
+        submit_info.command_pool = command_pool;
         submit_info.command_buffer = command_buffer;
         render::SubmitUniversal(submit_info);
-        render::EndFrame();
     }
 
     render::command_pool::ReturnCommandBuffer(command_pool, command_buffer);

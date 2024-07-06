@@ -15,6 +15,8 @@
 #include <spdlog/sinks/stdout_sinks.h>
 #include <spdlog/spdlog.h>
 
+#include "pipeline.h"
+
 #define RENDER_LOGGER_DECLARATION                                                                                      \
     namespace render {                                                                                                 \
     extern std::shared_ptr<spdlog::logger> logger;                                                                     \
@@ -247,6 +249,7 @@ struct SubmitInfo {
     VkPipelineStageFlags wait_stage_flags;
     std::vector<Semaphore> signal_semaphores;
     Fence* fence;
+    CommandPool* command_pool;
     CommandBuffer* command_buffer;
 };
 void SubmissionThread();

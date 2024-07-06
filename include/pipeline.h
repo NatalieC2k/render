@@ -9,13 +9,7 @@
 #include <mutex>
 #include <thread>
 
-#include "glm.hpp"
-
-#include "thread_pool.h"
-
-#include "render/context.h"
-#include "render/descriptor.h"
-#include "render/render_buffer.h"
+#include "vulkan/vulkan.h"
 
 namespace render {
 enum ShaderStage {
@@ -38,8 +32,8 @@ struct Shader {
     VkShaderModule vk_shader_module;
 };
 namespace shader {
-CompileGLSL(size_t buffer_size, char* buffer);
-CompileSPIRV(size_t buffer_size, char* buffer);
+VkShaderModule CompileGLSL(size_t buffer_size, char* buffer);
+VkShaderModule CompileSPIRV(size_t buffer_size, char* buffer);
 } // namespace shader
 
 struct VertexBinding {
@@ -87,14 +81,16 @@ struct PushConstantRange {
     uint32_t offset;
     uint32_t size;
 };
+
+struct Renderpass;
 struct PipelineInfo {
-    std::vector<PushConstantRange> push_constant_ranges;
-    std::vector<DescriptorSetLayout> descriptor_set_layouts;
+    // std::vector<PushConstantRange> push_constant_ranges;
+    // std::vector<DescriptorSetLayout> descriptor_set_layouts;
 
     std::vector<VertexBinding> vertex_bindings;
     std::vector<VertexAttribute> vertex_attributes;
 
-    RenderBuffer* render_buffer;
+    Renderpass* renderpass;
     std::vector<ShaderInfo> shaders;
 
     NGFX_FrontFace front_face = FRONT_FACE_CW;
