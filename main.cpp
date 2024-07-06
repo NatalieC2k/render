@@ -78,7 +78,7 @@ int main(int argc, char** argv) {
         render::fence::Await(fence);
         render::fence::Reset(fence);
 
-        render::command::ResetCommandBuffer(command_pool, command_buffer);
+        render::command_pool::ResetCommandBuffer(command_pool, command_buffer);
 
         SDL_Event e{};
         while (SDL_PollEvent(&e)) {

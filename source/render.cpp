@@ -361,6 +361,12 @@ CommandBuffer* BorrowCommandBuffer(CommandPool* pool) {
 void ReturnCommandBuffer(CommandPool* pool, CommandBuffer* command_buffer) {
     pool->free_command_buffer_queue.emplace_front(command_buffer);
 }
+void ResetCommandBuffer(CommandPool* pool, CommandBuffer* command_buffer) {
+    pool->completion_mutex.lock();
+    vkResetCommandBuffer(command_buffer->vk_command_buffer, 0);
+    command_buffer->completion_flag = false;
+    pool->completion_mutex.unlock();
+}
 
 void RecordThreadFunction(CommandPool* pool) {
     while (pool->active) {
@@ -903,13 +909,6 @@ void EndCommandBuffer(CommandPool* pool, CommandBuffer* command_buffer) {
     pool->completion_mutex.unlock();
     pool->completion_condition_variable.notify_all();
 };
-
-void ResetCommandBuffer(CommandPool* pool, CommandBuffer* command_buffer) {
-    pool->completion_mutex.lock();
-    vkResetCommandBuffer(command_buffer->vk_command_buffer, 0);
-    command_buffer->completion_flag = false;
-    pool->completion_mutex.unlock();
-}
 } // namespace command
 
 std::thread submission_thread = std::thread(SubmissionThread);

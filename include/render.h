@@ -109,6 +109,7 @@ void DestroyCommandPool(CommandPool* pool);
 namespace command_pool {
 CommandBuffer* BorrowCommandBuffer(CommandPool* pool);
 void ReturnCommandBuffer(CommandPool* pool, CommandBuffer* command_buffer);
+void ResetCommandBuffer(CommandPool* pool, CommandBuffer* command_buffer);
 
 void RecordAsync(CommandPool* pool, std::function<void()> function);
 void AwaitRecord(CommandPool* pool, CommandBuffer* command_buffer);
@@ -234,8 +235,6 @@ void DestroyFence(Fence* fence);
 namespace command {
 void BeginCommandBuffer(CommandPool* pool, CommandBuffer* command_buffer);
 void EndCommandBuffer(CommandPool* pool, CommandBuffer* command_buffer);
-
-void ResetCommandBuffer(CommandPool* pool, CommandBuffer* command_buffer);
 } // namespace command
 
 extern std::mutex submission_queue_mutex;
