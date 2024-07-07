@@ -673,15 +673,17 @@ void Recreate(Swapchain* swapchain) {
     Finalize(swapchain);
     Initialize(swapchain);
 };
-void AcquireImage(Swapchain* swapchain, uint32_t* image_index) {
+void AcquireImage(Swapchain* swapchain, uint32_t* image_index, VkSemaphore semaphore) {
+    swapchain->usage_mutex.lock();
     VkResult result = vkAcquireNextImageKHR(context.vk_device, swapchain->vk_swapchain, UINT64_MAX,
-                                            VK_NULL_HANDLE /*SEMAPHORE*/, VK_NULL_HANDLE /*FENCE*/, image_index);
+                                            semaphore /*SEMAPHORE*/, VK_NULL_HANDLE /*FENCE*/, image_index);
     if (result == VK_ERROR_OUT_OF_DATE_KHR) {
         RENDER_LOG_INFO("SWAPCHAIN IMAGE ACQUISITION: Swapchain Out of Date");
         Recreate(swapchain);
     } else if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
         RENDER_LOG_ERROR("SWAPCHAIN IMAGE ACQUISITION: Failed to Acquire Swapchain Image!");
     }
+    swapchain->usage_mutex.unlock();
 }
 } // namespace swapchain
 Swapchain* CreateSwapchain(core::Window window) {
@@ -694,7 +696,66 @@ void DestroySwapchain(Swapchain* swapchain) {
     delete swapchain;
 }
 
-namespace shader {}
+namespace shader {
+VkShaderModule CompileGLSL(size_t buffer_size, char* buffer) { return VK_NULL_HANDLE; }
+VkShaderModule CompileSPIRV(size_t buffer_size, char* buffer) {
+    VkShaderModuleCreateInfo create_info{};
+    create_info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    create_info.pNext = nullptr;
+    create_info.flags = 0;
+    create_info.codeSize = buffer_size;
+    create_info.pCode = (uint32_t*)buffer;
+
+    VkShaderModule vk_shader_module;
+    VkResult vk_result = vkCreateShaderModule(render::context.vk_device, &create_info, nullptr, &vk_shader_module);
+    if (vk_result != VK_SUCCESS) {
+        throw std::runtime_error("FAILED TO CREATE SHADER MODULE FROM SPIRV");
+    }
+    return vk_shader_module;
+}
+void Initialize(Shader* pointer, ShaderInfo info) {
+    size_t name_end = info.filepath.find_last_of(".");
+    switch (info.shader_code_format) {
+    case SHADER_FORMAT_GLSL: {
+        std::string stage_argument("-fshader-stage=");
+        switch (info.shader_stage) {
+        case SHADER_STAGE_VERTEX: {
+            stage_argument += "vertex ";
+            break;
+        }
+        case SHADER_STAGE_FRAGMENT: {
+            stage_argument += "fragment ";
+            break;
+        }
+        }
+
+        std::string cmd = "/Users/natalie/VulkanSDK/1.3.268.1/macOS/bin/glslc " + stage_argument + info.filepath +
+                          " -o " + info.filepath.substr(0, name_end) + ".spirv";
+        system(cmd.c_str());
+    }
+    case SHADER_FORMAT_SPIRV: {
+        size_t size = std::filesystem::file_size(info.filepath);
+        std::ifstream file(info.filepath);
+
+        char* buffer = new char[size];
+        file.read(buffer, size);
+        pointer->vk_shader_module = CompileSPIRV(size, buffer);
+        break;
+    }
+    }
+}
+void Finalize(Shader* pointer) { vkDestroyShaderModule(context.vk_device, pointer->vk_shader_module, nullptr); }
+} // namespace shader
+Shader* CreateShader(ShaderInfo info) {
+    auto shader = new Shader{};
+    shader::Initialize(shader, info);
+    return shader;
+}
+void DestroyShader(Shader* shader) {
+    shader::Finalize(shader);
+    delete shader;
+}
+
 namespace pipeline {
 void Initialize(Pipeline* pointer, PipelineInfo info) {
     std::vector<VkPipelineShaderStageCreateInfo> vk_shader_stage_info{};
@@ -703,7 +764,7 @@ void Initialize(Pipeline* pointer, PipelineInfo info) {
     stage_info.pName = "main";
     for (ShaderInfo shader_info : info.shaders) {
         stage_info.stage = (VkShaderStageFlagBits)shader_info.shader_stage;
-        // stage_info.module = CompileShader(shader_info);
+        stage_info.module = CreateShader(shader_info)->vk_shader_module;
         vk_shader_stage_info.emplace_back(stage_info);
     }
 
@@ -838,7 +899,20 @@ void Initialize(Pipeline* pointer, PipelineInfo info) {
         vkDestroyShaderModule(context.vk_device, info.module, nullptr);
     }
 }
+void Finalize(Pipeline* pointer) {
+    vkDestroyPipeline(context.vk_device, pointer->vk_pipeline, nullptr);
+    vkDestroyPipelineLayout(context.vk_device, pointer->vk_pipeline_layout, nullptr);
+}
 } // namespace pipeline
+Pipeline* CreatePipeline(PipelineInfo info) {
+    auto pipeline = new Pipeline{};
+    pipeline::Initialize(pipeline, info);
+    return pipeline;
+}
+void DestroyPipeline(Pipeline* pointer) {
+    pipeline::Finalize(pointer);
+    delete pointer;
+}
 
 namespace semaphore {
 void Initialize(Semaphore* pointer) {
@@ -850,15 +924,12 @@ void Initialize(Semaphore* pointer) {
 }
 void Finalize(Semaphore* pointer) { vkDestroySemaphore(render::context.vk_device, pointer->vk_semaphore, nullptr); }
 } // namespace semaphore
-Semaphore* CreateSemaphore() {
-    auto semaphore = new Semaphore{};
-    semaphore::Initialize(semaphore);
+Semaphore CreateSemaphore() {
+    auto semaphore = Semaphore{};
+    semaphore::Initialize(&semaphore);
     return semaphore;
 }
-void DestroySemaphore(Semaphore* semaphore) {
-    semaphore::Finalize(semaphore);
-    delete semaphore;
-}
+void DestroySemaphore(Semaphore semaphore) { semaphore::Finalize(&semaphore); }
 
 namespace fence {
 void Initialize(Fence* pointer, FenceInitializationState init_state) {
@@ -908,7 +979,11 @@ void EndCommandBuffer(CommandPool* pool, CommandBuffer* command_buffer) {
     command_buffer->completion_flag = true;
     pool->completion_mutex.unlock();
     pool->completion_condition_variable.notify_all();
-};
+}
+
+void BindPipeline(CommandBuffer* command_buffer, Pipeline* pipeline) {
+    vkCmdBindPipeline(command_buffer->vk_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline->vk_pipeline);
+}
 } // namespace command
 
 std::thread submission_thread = std::thread(SubmissionThread);
@@ -931,7 +1006,7 @@ void SubmissionThread() {
         submission_queue_mutex.unlock();
     }
 }
-void SubmitUniversal(SubmitInfo submit_info) {
+void SubmitUniversalAsync(SubmitInfo submit_info) {
     submission_queue_mutex.lock();
     submission_function_queue.emplace_back([submit_info]() {
         render::command_pool::AwaitRecord(submit_info.command_pool, submit_info.command_buffer);
@@ -959,12 +1034,32 @@ void SubmitUniversal(SubmitInfo submit_info) {
 
             submission_condition.notify_all();
         }
-        RENDER_LOG_INFO("SUBMIT OVER");
     });
     submission_queue_mutex.unlock();
 }
 void SubmitCompute(SubmitInfo submit_info) {}
 void SubmitStaging(SubmitInfo submit_info) {}
+
+void SubmitPresentAsync(PresentInfo present_info) {
+    submission_queue_mutex.lock();
+    submission_function_queue.emplace_back([present_info]() {
+        VkPresentInfoKHR vk_present_info{};
+        vk_present_info.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+        vk_present_info.pNext = nullptr;
+
+        vk_present_info.waitSemaphoreCount = (uint32_t)present_info.wait_semaphores.size();
+        vk_present_info.pWaitSemaphores = (VkSemaphore*)present_info.wait_semaphores.data();
+
+        vk_present_info.swapchainCount = (uint32_t)present_info.swapchains.size();
+        vk_present_info.pSwapchains = &present_info.swapchains[0]->vk_swapchain;
+        vk_present_info.pImageIndices = present_info.image_indices.data();
+
+        present_info.swapchains[0]->usage_mutex.lock();
+        vkQueuePresentKHR(context.universal_queue.vk_queue, &vk_present_info);
+        present_info.swapchains[0]->usage_mutex.unlock();
+    });
+    submission_queue_mutex.unlock();
+}
 
 uint32_t frame;
 void EndFrame() {

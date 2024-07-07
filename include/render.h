@@ -120,6 +120,7 @@ void RecordThreadFunction(CommandPool* pool);
 struct Swapchain {
     core::Window window;
 
+    std::mutex usage_mutex{};
     Extent3D extent;
     VkSurfaceKHR vk_surface;
     VkSurfaceFormatKHR vk_surface_format;
@@ -132,7 +133,7 @@ void Initialize(Swapchain* swapchain);
 void Finalize(Swapchain* swapchain);
 
 void Recreate(Swapchain* swapchain);
-void AcquireImage(Swapchain* swapchain, uint32_t* image_index);
+void AcquireImage(Swapchain* swapchain, uint32_t* image_index, VkSemaphore semaphore);
 } // namespace swapchain
 Swapchain* CreateSwapchain(core::Window window);
 void DestroySwapchain(Swapchain* swapchain);
@@ -211,8 +212,8 @@ namespace semaphore {
 void Initialize(Semaphore* pointer);
 void Finalize(Semaphore* pointer);
 } // namespace semaphore
-Semaphore* CreateSemaphore();
-void DestroySemaphore(Semaphore* semaphore);
+Semaphore CreateSemaphore();
+void DestroySemaphore(Semaphore semaphore);
 
 struct Fence {
     bool submission_flag = true;
@@ -235,6 +236,8 @@ void DestroyFence(Fence* fence);
 namespace command {
 void BeginCommandBuffer(CommandPool* pool, CommandBuffer* command_buffer);
 void EndCommandBuffer(CommandPool* pool, CommandBuffer* command_buffer);
+
+void BindPipeline(CommandBuffer* command_buffer, Pipeline* pipeline);
 } // namespace command
 
 extern std::mutex submission_queue_mutex;
@@ -251,10 +254,18 @@ struct SubmitInfo {
     CommandPool* command_pool;
     CommandBuffer* command_buffer;
 };
+struct PresentInfo {
+    std::vector<Semaphore> wait_semaphores;
+    std::vector<Swapchain*> swapchains;
+    std::vector<uint32_t> image_indices;
+};
+
 void SubmissionThread();
-void SubmitUniversal(SubmitInfo submit_info);
+void SubmitUniversalAsync(SubmitInfo submit_info);
 void SubmitCompute(SubmitInfo submit_info);
 void SubmitStaging(SubmitInfo submit_info);
+
+void SubmitPresentAsync(PresentInfo present_info);
 
 extern uint32_t frame;
 void EndFrame();

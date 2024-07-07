@@ -34,7 +34,12 @@ struct Shader {
 namespace shader {
 VkShaderModule CompileGLSL(size_t buffer_size, char* buffer);
 VkShaderModule CompileSPIRV(size_t buffer_size, char* buffer);
+
+void Initialize(Shader* pointer, ShaderInfo shader_info);
+void Finalize(Shader* pointer);
 } // namespace shader
+Shader* CreateShader(ShaderInfo info);
+void DestroyShader(Shader* shader);
 
 struct VertexBinding {
     uint32_t binding;
@@ -105,9 +110,9 @@ struct Pipeline {
 };
 namespace pipeline {
 void Initialize(Pipeline* pointer, PipelineInfo info);
-void Terminate(Pipeline* pointer);
+void Finalize(Pipeline* pointer);
 } // namespace pipeline
-Pipeline* CreatePipeline();
+Pipeline* CreatePipeline(PipelineInfo info);
 void DestroyPipeline(Pipeline* pointer);
 
 } // namespace render

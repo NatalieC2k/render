@@ -5,11 +5,14 @@ core::Window window{};
 render::Swapchain* swapchain{};
 
 render::Renderpass* renderpass;
-render::renderpass::InstanceIndex;
 render::Framebuffer* framebuffer;
+
+render::Pipeline* pipeline;
 
 render::CommandPool* command_pool;
 
+render::Semaphore image_acquisition_semaphore;
+render::Semaphore render_completion_semaphore;
 render::Fence* fence;
 
 void Initialize() {
@@ -49,8 +52,24 @@ void Initialize() {
     framebuffer_info.extent = swapchain->extent;
     framebuffer = render::CreateFramebuffer(framebuffer_info);
 
+    render::PipelineInfo pipeline_info{};
+    pipeline_info.renderpass = renderpass;
+    pipeline_info.shaders = {
+        {render::SHADER_STAGE_VERTEX, render::SHADER_FORMAT_SPIRV,
+         "/Users/natalie/Desktop/engine_rewrite/build/vert.spirv"},
+        {render::SHADER_STAGE_FRAGMENT, render::SHADER_FORMAT_SPIRV,
+         "/Users/natalie/Desktop/engine_rewrite/build/frag.spirv"},
+    };
+    pipeline_info.front_face = render::FRONT_FACE_CW;
+    pipeline_info.cull_mode = render::NGFX_CULL_MODE_NONE;
+    pipeline_info.depth_test_enabled = false;
+    pipeline_info.depth_write_enabled = false;
+    pipeline = render::CreatePipeline(pipeline_info);
+
     command_pool = render::CreateCommandPool();
 
+    image_acquisition_semaphore = render::CreateSemaphore();
+    render_completion_semaphore = render::CreateSemaphore();
     fence = render::CreateFence(render::fence::INITIALIZE_SIGNALED);
 }
 void Finalize() {
@@ -91,14 +110,16 @@ int main(int argc, char** argv) {
                 running = false;
             }
         }
-        render::command_pool::RecordAsync(command_pool, [command_buffer]() {
+        uint32_t image_index = 0;
+        render::swapchain::AcquireImage(swapchain, &image_index, image_acquisition_semaphore.vk_semaphore);
+        render::command_pool::RecordAsync(command_pool, [command_buffer, image_index]() {
             render::command::BeginCommandBuffer(command_pool, command_buffer);
             VkRenderPassBeginInfo begin_info{};
             begin_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
             begin_info.pNext = nullptr;
 
             begin_info.renderPass = renderpass->vk_render_pass;
-            begin_info.framebuffer = framebuffer->vk_framebuffer[0];
+            begin_info.framebuffer = framebuffer->vk_framebuffer[image_index];
             begin_info.renderArea = {
                 0,
                 0,
@@ -112,18 +133,41 @@ int main(int argc, char** argv) {
             begin_info.pClearValues = clear_value;
 
             vkCmdBeginRenderPass(command_buffer->vk_command_buffer, &begin_info, VK_SUBPASS_CONTENTS_INLINE);
+
+            render::command::BindPipeline(command_buffer, pipeline);
+            VkViewport viewport{};
+            viewport.width = swapchain->extent.x;
+            viewport.height = swapchain->extent.y;
+            viewport.x = 0;
+            viewport.y = 0;
+            viewport.minDepth = 0.0f;
+            viewport.maxDepth = 1.0f;
+            vkCmdSetViewport(command_buffer->vk_command_buffer, 0, 1, &viewport);
+
+            VkRect2D scissor{};
+            scissor.offset = {0, 0};
+            scissor.extent = {swapchain->extent.x, swapchain->extent.y};
+            vkCmdSetScissor(command_buffer->vk_command_buffer, 0, 1, &scissor);
+            vkCmdDraw(command_buffer->vk_command_buffer, 3, 1, 0, 0);
+
             vkCmdEndRenderPass(command_buffer->vk_command_buffer);
             render::command::EndCommandBuffer(command_pool, command_buffer);
         });
 
         auto submit_info = render::SubmitInfo{};
-        submit_info.wait_semaphores = {};
-        submit_info.signal_semaphores = {};
+        submit_info.wait_semaphores = {image_acquisition_semaphore};
+        submit_info.wait_stage_flags = {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
+        submit_info.signal_semaphores = {render_completion_semaphore};
         submit_info.fence = fence;
         submit_info.command_pool = command_pool;
         submit_info.command_buffer = command_buffer;
-        render::SubmitUniversal(submit_info);
+        render::SubmitUniversalAsync(submit_info);
+
+        auto present_info = render::PresentInfo{{render_completion_semaphore}, {swapchain}, {image_index}};
+        render::SubmitPresentAsync(present_info);
     }
+    render::fence::Await(fence);
+    render::fence::Reset(fence);
 
     render::command_pool::ReturnCommandBuffer(command_pool, command_buffer);
     Finalize();
