@@ -127,6 +127,8 @@ struct Swapchain {
     VkSwapchainKHR vk_swapchain;
     std::vector<VkImage> vk_images;
     std::vector<VkImageView> vk_image_views;
+
+    std::vector<std::function<void()>> recreation_functions{};
 };
 namespace swapchain {
 void Initialize(Swapchain* swapchain);
@@ -134,6 +136,8 @@ void Finalize(Swapchain* swapchain);
 
 void Recreate(Swapchain* swapchain);
 void AcquireImage(Swapchain* swapchain, uint32_t* image_index, VkSemaphore semaphore);
+
+void BindRecreationFunction(Swapchain* swapchain, std::function<void()> function);
 } // namespace swapchain
 Swapchain* CreateSwapchain(core::Window window);
 void DestroySwapchain(Swapchain* swapchain);

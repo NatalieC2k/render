@@ -389,7 +389,6 @@ void AwaitRecord(CommandPool* pool, CommandBuffer* command_buffer) {
     std::unique_lock<std::mutex> lock(pool->completion_mutex);
     pool->completion_condition_variable.wait(lock, [command_buffer] { return command_buffer->completion_flag; });
     lock.unlock();
-    RENDER_LOG_INFO("AWAIT RECORD COMPLETE");
 }
 } // namespace command_pool
 
@@ -672,6 +671,10 @@ void Recreate(Swapchain* swapchain) {
     RENDER_LOG_INFO("SWAPCHAIN RECREATION TRIGGERED");
     Finalize(swapchain);
     Initialize(swapchain);
+
+    for (auto function : swapchain->recreation_functions) {
+        function();
+    }
 };
 void AcquireImage(Swapchain* swapchain, uint32_t* image_index, VkSemaphore semaphore) {
     swapchain->usage_mutex.lock();
@@ -684,6 +687,10 @@ void AcquireImage(Swapchain* swapchain, uint32_t* image_index, VkSemaphore semap
         RENDER_LOG_ERROR("SWAPCHAIN IMAGE ACQUISITION: Failed to Acquire Swapchain Image!");
     }
     swapchain->usage_mutex.unlock();
+}
+
+void BindRecreationFunction(Swapchain* swapchain, std::function<void()> function) {
+    swapchain->recreation_functions.emplace_back(function);
 }
 } // namespace swapchain
 Swapchain* CreateSwapchain(core::Window window) {
@@ -830,8 +837,8 @@ void Initialize(Pipeline* pointer, PipelineInfo info) {
     VkPipelineDepthStencilStateCreateInfo depth_stencil{};
     depth_stencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
     depth_stencil.flags = 0;
-    depth_stencil.depthTestEnable = info.depth_test_enabled;
-    depth_stencil.depthWriteEnable = info.depth_write_enabled;
+    depth_stencil.depthTestEnable = false;  // info.depth_test_enabled;
+    depth_stencil.depthWriteEnable = false; // info.depth_write_enabled;
     depth_stencil.depthCompareOp = VK_COMPARE_OP_LESS;
 
     depth_stencil.depthBoundsTestEnable = VK_FALSE;
