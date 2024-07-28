@@ -111,11 +111,39 @@ CommandBuffer* BorrowCommandBuffer(CommandPool* pool);
 void ReturnCommandBuffer(CommandPool* pool, CommandBuffer* command_buffer);
 void ResetCommandBuffer(CommandPool* pool, CommandBuffer* command_buffer);
 
-void RecordAsync(CommandPool* pool, std::function<void()> function);
+void RecordAsync(CommandPool* pool, CommandBuffer* command_buffer, std::function<void()> function);
 void AwaitRecord(CommandPool* pool, CommandBuffer* command_buffer);
 
 void RecordThreadFunction(CommandPool* pool);
 } // namespace command_pool
+
+struct Semaphore {
+    VkSemaphore vk_semaphore;
+};
+namespace semaphore {
+void Initialize(Semaphore* pointer);
+void Finalize(Semaphore* pointer);
+} // namespace semaphore
+Semaphore CreateSemaphore();
+void DestroySemaphore(Semaphore semaphore);
+
+struct Fence {
+    bool submission_flag = true;
+    VkFence vk_fence = VK_NULL_HANDLE;
+};
+namespace fence {
+enum FenceInitializationState {
+    INITIALIZE_UNSIGNALED = 0,
+    INITIALIZE_SIGNALED = 1,
+};
+void Initialize(Fence* pointer, FenceInitializationState init_state);
+void Finalize(Fence* pointer);
+
+void Await(Fence* fence);
+void Reset(Fence* fence);
+} // namespace fence
+Fence* CreateFence(fence::FenceInitializationState init_state);
+void DestroyFence(Fence* fence);
 
 struct Swapchain {
     core::Window window;
@@ -135,7 +163,7 @@ void Initialize(Swapchain* swapchain);
 void Finalize(Swapchain* swapchain);
 
 void Recreate(Swapchain* swapchain);
-void AcquireImage(Swapchain* swapchain, uint32_t* image_index, VkSemaphore semaphore);
+void AcquireImage(Swapchain* swapchain, uint32_t* image_index, Semaphore semaphore, Fence* fence);
 
 void BindRecreationFunction(Swapchain* swapchain, std::function<void()> function);
 } // namespace swapchain
@@ -191,8 +219,11 @@ struct Renderpass {
     VkRenderPass vk_render_pass;
 };
 namespace renderpass {
-typedef uint32_t InstanceIndex;
-}
+void Initialize(Renderpass* renderpass, RenderpassInfo info);
+void Finalize(Renderpass* renderpass);
+
+void Recreate(Renderpass* renderpass, RenderpassInfo info);
+} // namespace renderpass
 Renderpass* CreateRenderpass(RenderpassInfo info);
 void DestroyRenderpass(Renderpass* renderpass);
 
@@ -206,36 +237,14 @@ struct Framebuffer {
     std::optional<FramebufferInfo> recreation_info{};
     std::vector<VkFramebuffer> vk_framebuffer{};
 };
+namespace framebuffer {
+void Initialize(Framebuffer* framebuffer, FramebufferInfo info);
+void Finalize(Framebuffer* framebuffer);
+
+void Recreate(Framebuffer* framebuffer, FramebufferInfo info);
+} // namespace framebuffer
 Framebuffer* CreateFramebuffer(FramebufferInfo info);
 void DestroyFramebuffer(Framebuffer* framebuffer);
-
-struct Semaphore {
-    VkSemaphore vk_semaphore;
-};
-namespace semaphore {
-void Initialize(Semaphore* pointer);
-void Finalize(Semaphore* pointer);
-} // namespace semaphore
-Semaphore CreateSemaphore();
-void DestroySemaphore(Semaphore semaphore);
-
-struct Fence {
-    bool submission_flag = true;
-    VkFence vk_fence = VK_NULL_HANDLE;
-};
-namespace fence {
-enum FenceInitializationState {
-    INITIALIZE_UNSIGNALED = 0,
-    INITIALIZE_SIGNALED = 1,
-};
-void Initialize(Fence* pointer, FenceInitializationState init_state);
-void Finalize(Fence* pointer);
-
-void Await(Fence* fence);
-void Reset(Fence* fence);
-} // namespace fence
-Fence* CreateFence(fence::FenceInitializationState init_state);
-void DestroyFence(Fence* fence);
 
 namespace command {
 void BeginCommandBuffer(CommandPool* pool, CommandBuffer* command_buffer);
@@ -262,6 +271,7 @@ struct PresentInfo {
     std::vector<Semaphore> wait_semaphores;
     std::vector<Swapchain*> swapchains;
     std::vector<uint32_t> image_indices;
+    Fence* fence;
 };
 
 void SubmissionThread();
@@ -271,10 +281,8 @@ void SubmitStaging(SubmitInfo submit_info);
 
 void SubmitPresentAsync(PresentInfo present_info);
 
-extern uint32_t frame;
-void EndFrame();
+void AwaitIdle();
 
-extern std::mutex frame_loop_function_queue_mutex;
-extern std::deque<std::function<void()>> frame_loop_function_queue[MAX_FRAMES_IN_FLIGHT];
-void EnqueueFrameLoopFunction(std::function<void()> function);
+void InitializeSubmission();
+void FinalizeSubmission();
 } // namespace render

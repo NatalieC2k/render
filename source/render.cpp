@@ -363,26 +363,31 @@ void ReturnCommandBuffer(CommandPool* pool, CommandBuffer* command_buffer) {
 }
 void ResetCommandBuffer(CommandPool* pool, CommandBuffer* command_buffer) {
     pool->completion_mutex.lock();
-    vkResetCommandBuffer(command_buffer->vk_command_buffer, 0);
     command_buffer->completion_flag = false;
+    vkResetCommandBuffer(command_buffer->vk_command_buffer, 0);
     pool->completion_mutex.unlock();
 }
 
 void RecordThreadFunction(CommandPool* pool) {
     while (pool->active) {
         std::unique_lock<std::mutex> lock(pool->mutex);
-        pool->condition_variable.wait(lock, [pool]() { return pool->record_queue.size() != 0; });
-        auto function = pool->record_queue.back();
-        pool->record_queue.pop_back();
+        pool->condition_variable.wait(lock, [pool]() { return pool->record_queue.size() > 0; });
+        auto function = pool->record_queue.front();
+        pool->record_queue.pop_front();
         lock.unlock();
 
         function();
     }
 }
-void RecordAsync(CommandPool* pool, std::function<void()> function) {
+void RecordAsync(CommandPool* pool, CommandBuffer* command_buffer, std::function<void()> function) {
+    pool->completion_mutex.lock();
+    command_buffer->completion_flag = false;
+    pool->completion_mutex.unlock();
+
     pool->mutex.lock();
     pool->record_queue.emplace_back(function);
     pool->mutex.unlock();
+
     pool->condition_variable.notify_all();
 }
 void AwaitRecord(CommandPool* pool, CommandBuffer* command_buffer) {
@@ -448,9 +453,9 @@ void Initialize(Renderpass* renderpass, RenderpassInfo info) {
 void Finalize(Renderpass* renderpass) {
     vkDestroyRenderPass(render::context.vk_device, renderpass->vk_render_pass, nullptr);
 }
-void Recreate(Renderpass* renderpass) {
+void Recreate(Renderpass* renderpass, RenderpassInfo info) {
     Finalize(renderpass);
-    Initialize(renderpass, *renderpass->recreation_info);
+    Initialize(renderpass, info);
 }
 } // namespace renderpass
 Renderpass* CreateRenderpass(RenderpassInfo info) {
@@ -511,6 +516,12 @@ void Finalize(Framebuffer* framebuffer) {
     for (auto vk_framebuffer : framebuffer->vk_framebuffer) {
         vkDestroyFramebuffer(context.vk_device, vk_framebuffer, nullptr);
     }
+    framebuffer->vk_framebuffer = {};
+}
+
+void Recreate(Framebuffer* framebuffer, FramebufferInfo info) {
+    Finalize(framebuffer);
+    Initialize(framebuffer, info);
 }
 } // namespace framebuffer
 Framebuffer* CreateFramebuffer(FramebufferInfo info) {
@@ -668,7 +679,8 @@ void Finalize(Swapchain* swapchain) {
 }
 
 void Recreate(Swapchain* swapchain) {
-    RENDER_LOG_INFO("SWAPCHAIN RECREATION TRIGGERED");
+    render::AwaitIdle();
+
     Finalize(swapchain);
     Initialize(swapchain);
 
@@ -676,10 +688,11 @@ void Recreate(Swapchain* swapchain) {
         function();
     }
 };
-void AcquireImage(Swapchain* swapchain, uint32_t* image_index, VkSemaphore semaphore) {
+
+void AcquireImage(Swapchain* swapchain, uint32_t* image_index, Semaphore semaphore, Fence* fence) {
     swapchain->usage_mutex.lock();
     VkResult result = vkAcquireNextImageKHR(context.vk_device, swapchain->vk_swapchain, UINT64_MAX,
-                                            semaphore /*SEMAPHORE*/, VK_NULL_HANDLE /*FENCE*/, image_index);
+                                            semaphore.vk_semaphore, fence->vk_fence, image_index);
     if (result == VK_ERROR_OUT_OF_DATE_KHR) {
         RENDER_LOG_INFO("SWAPCHAIN IMAGE ACQUISITION: Swapchain Out of Date");
         Recreate(swapchain);
@@ -956,8 +969,8 @@ void Await(Fence* fence) {
 }
 void Reset(Fence* fence) {
     submission_mutex.lock();
-    vkResetFences(render::context.vk_device, 1, &fence->vk_fence);
     fence->submission_flag = false;
+    vkResetFences(render::context.vk_device, 1, &fence->vk_fence);
     submission_mutex.unlock();
 }
 } // namespace fence
@@ -993,24 +1006,30 @@ void BindPipeline(CommandBuffer* command_buffer, Pipeline* pipeline) {
 }
 } // namespace command
 
+bool submission_active = true;
+
 std::thread submission_thread = std::thread(SubmissionThread);
 std::mutex submission_queue_mutex{};
 std::deque<std::function<void()>> submission_function_queue{};
+std::condition_variable submission_queue_condition{};
+
+std::condition_variable submission_empty_condition{};
 
 std::mutex submission_mutex{};
 std::condition_variable submission_condition{};
 
 void SubmissionThread() {
-    while (true) {
-        submission_queue_mutex.lock();
-        if (submission_function_queue.size() != 0) {
-            std::function<void()> function = submission_function_queue.front();
-            submission_function_queue.pop_front();
-            submission_queue_mutex.unlock();
-            function();
-            continue;
-        }
-        submission_queue_mutex.unlock();
+    while (submission_active) {
+        std::unique_lock lock(submission_queue_mutex);
+        submission_queue_condition.wait(lock, []() { return submission_function_queue.size() > 0; });
+        std::function<void()> function = submission_function_queue.front();
+        lock.unlock();
+        function();
+
+        lock.lock();
+        submission_function_queue.pop_front();
+        lock.unlock();
+        submission_empty_condition.notify_one();
     }
 }
 void SubmitUniversalAsync(SubmitInfo submit_info) {
@@ -1043,6 +1062,7 @@ void SubmitUniversalAsync(SubmitInfo submit_info) {
         }
     });
     submission_queue_mutex.unlock();
+    submission_queue_condition.notify_one();
 }
 void SubmitCompute(SubmitInfo submit_info) {}
 void SubmitStaging(SubmitInfo submit_info) {}
@@ -1064,26 +1084,33 @@ void SubmitPresentAsync(PresentInfo present_info) {
         present_info.swapchains[0]->usage_mutex.lock();
         vkQueuePresentKHR(context.universal_queue.vk_queue, &vk_present_info);
         present_info.swapchains[0]->usage_mutex.unlock();
+
+        if (present_info.fence != nullptr) {
+            submission_mutex.lock();
+            present_info.fence->submission_flag = true;
+            submission_mutex.unlock();
+
+            submission_condition.notify_all();
+        }
     });
     submission_queue_mutex.unlock();
+    submission_queue_condition.notify_one();
 }
 
-uint32_t frame;
-void EndFrame() {
-    frame = (frame + 1) % MAX_FRAMES_IN_FLIGHT;
-    frame_loop_function_queue_mutex.lock();
-    for (auto function : frame_loop_function_queue[frame]) {
-        function();
-    }
-    frame_loop_function_queue[frame] = {};
-    frame_loop_function_queue_mutex.unlock();
+void AwaitIdle() {
+    std::unique_lock lock(submission_queue_mutex);
+    submission_empty_condition.wait(lock, []() { return submission_function_queue.size() == 0; });
+    vkDeviceWaitIdle(render::context.vk_device);
+    lock.unlock();
 }
 
-std::mutex frame_loop_function_queue_mutex;
-std::deque<std::function<void()>> frame_loop_function_queue[MAX_FRAMES_IN_FLIGHT];
-void EnqueueFrameLoopFunction(std::function<void()> function) {
-    frame_loop_function_queue_mutex.lock();
-    frame_loop_function_queue[render::frame].emplace_back(function);
-    frame_loop_function_queue_mutex.unlock();
+void InitializeSubmission() {}
+void FinalizeSubmission() {
+    submission_queue_mutex.lock();
+    submission_active = false;
+    submission_function_queue.emplace_back([]() {});
+    submission_queue_mutex.unlock();
+    submission_queue_condition.notify_all();
+    submission_thread.join();
 }
 } // namespace render
